@@ -1,0 +1,39 @@
+# --- CẤU HÌNH HỆ THỐNG & IDE ---
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+.history/
+
+# --- THƯ VIỆN & PHỤ THUỘC (KHÔNG ĐƯA LÊN GIT) ---
+node_modules/
+dist/
+build/
+coverage/
+
+# --- DỮ LIỆU RIÊNG TƯ & TẠM THỜI (QUAN TRỌNG) ---
+# Thư mục temp chứa file audio/video chunk là dữ liệu tạm, không cần git
+temp/
+
+# Các file audio/video gốc là file nặng và có thể chứa bản quyền cá nhân
+*.mp4
+*.wav
+*.avi
+*.mov
+
+# File cấu hình chứa API Key, mật khẩu (Cực kỳ quan trọng)
+.env
+.env.local
+.env.*.local
+config.json
+secret.json
+
+# --- LOG & DATABASE ---
+*.log
+*.sqlite
+*.sqlite-journal
+db/
+
+# --- CÁC FILE WHISPER (NẾU CÓ) ---
+*.bin
+!ggml-base.bin # Bỏ comment nếu bạn muốn giữ lại model base trong repo
