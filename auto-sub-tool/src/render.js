@@ -67,6 +67,7 @@ async function renderVideo() {
   }
 
   // 3. TÍNH TOÁN CẤU HÌNH RENDER
+  // 3. TÍNH TOÁN CẤU HÌNH RENDER
   let videoWidth = 1920,
     videoHeight = 1080;
   try {
@@ -81,35 +82,50 @@ async function renderVideo() {
   }
 
   const isVertical = videoHeight > videoWidth;
+
+  // Tinh chỉnh lại tỷ lệ để đẹp trên mọi màn hình
   const styleConfig = {
     playResX: videoWidth,
     playResY: videoHeight,
-    marginV: Math.floor(videoHeight * (isVertical ? 0.15 : 0.08)),
-    marginLR: Math.floor(videoWidth * 0.08),
-    fontSize: Math.floor(videoHeight * (isVertical ? 0.045 : 0.05)),
-    outline: Math.max(2, Math.floor(videoHeight * 0.004)),
-    shadow: Math.max(1, Math.floor(videoHeight * 0.002)),
+    // Màn dọc (TikTok/Shorts) đẩy subtitle lên cao hơn chút (12%) để tránh UI của app, màn ngang để 8%
+    marginV: Math.floor(videoHeight * (isVertical ? 0.12 : 0.08)),
+    marginLR: Math.floor(videoWidth * 0.05), // Thu nhỏ lề 2 bên lại để có nhiều không gian text hơn
+    fontSize: Math.floor(videoHeight * (isVertical ? 0.038 : 0.05)), // Chữ màn dọc gọn lại để không bị rớt dòng chữ dài
+    outline: Math.max(2.5, Math.floor(videoHeight * 0.005)), // Làm viền dày & sắc nét hơn (rất quan trọng để dễ đọc)
+    shadow: Math.max(1.5, Math.floor(videoHeight * 0.003)), // Bóng đổ nhẹ tạo chiều sâu
   };
 
   // 4. XÂY DỰNG FILE ASS
   const assPath = path.join(paths.tempDir, "auto_style.ass");
   let assContent = `[Script Info]\nPlayResX: ${styleConfig.playResX}\nPlayResY: ${styleConfig.playResY}\nScaledBorderAndShadow: yes\n\n`;
   assContent += `[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n`;
-  assContent += `Style: Default,Arial,${styleConfig.fontSize},&H00FFFFFF,&H000000FF,&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,${styleConfig.outline},${styleConfig.shadow},2,${styleConfig.marginLR},${styleConfig.marginLR},${styleConfig.marginV},1\n\n`;
+
+  // Dùng Roboto hoặc Arial. Set Bold = -1 (True trong ASS) để chữ đậm, dễ đọc. BackColour có độ trong suốt.
+  assContent += `Style: Default,Arial,${styleConfig.fontSize},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,${styleConfig.outline},${styleConfig.shadow},2,${styleConfig.marginLR},${styleConfig.marginLR},${styleConfig.marginV},1\n\n`;
+
   assContent += `[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n`;
 
   for (let sub of subs) {
     const lines = sub.text.trim().split(/\r?\n/);
     let textAss = "";
+
     if (lines.length >= 3) {
-      // 3 Tầng: Trung (Vàng), Anh (Xanh), Việt (Trắng)
-      textAss = `{\\fs${Math.floor(styleConfig.fontSize * 0.9)}\\1c&H00FFFF&\\b1}${lines[0]}\\N{\\fs${Math.floor(styleConfig.fontSize * 0.8)}\\1c&HFFFF00&\\b1}${lines[1]}\\N{\\fs${styleConfig.fontSize}\\1c&HFFFFFF&\\b1}${lines[2]}`;
+      // 3 Tầng:
+      // Dòng 1 (Trung): Chữ nhỏ nhất (75%), màu Vàng (Yellow: &H00FFFF&)
+      // Dòng 2 (Anh): Chữ vừa (85%), màu Xám nhạt bạc (Silver: &HCCCCCC&) để làm dịu mắt, nhường spotlight cho 2 ngôn ngữ kia
+      // Dòng 3 (Việt): Chữ to nhất (100%), màu Trắng tinh (&HFFFFFF&)
+      textAss = `{\\fs${Math.floor(styleConfig.fontSize * 0.75)}\\1c&H00FFFF&}${lines[0]}\\N{\\fs${Math.floor(styleConfig.fontSize * 0.85)}\\1c&HCCCCCC&}${lines[1]}\\N{\\fs${styleConfig.fontSize}\\1c&HFFFFFF&}${lines[2]}`;
     } else if (lines.length === 2) {
-      // 2 Tầng: Anh (Vàng), Việt (Trắng)
-      textAss = `{\\fs${Math.floor(styleConfig.fontSize * 0.9)}\\1c&HFFFF00&\\b1}${lines[0]}\\N{\\fs${styleConfig.fontSize}\\1c&HFFFFFF&\\b1}${lines[1]}`;
+      // 2 Tầng:
+      // Dòng 1 (Anh/Trung): Chữ nhỏ hơn xíu (80%), màu Vàng hoặc Xanh ngọc (&HFFFF00& - Cyan)
+      // Dòng 2 (Việt): Chữ to (100%), Trắng tinh
+      textAss = `{\\fs${Math.floor(styleConfig.fontSize * 0.8)}\\1c&H00FFFF&}${lines[0]}\\N{\\fs${styleConfig.fontSize}\\1c&HFFFFFF&}${lines[1]}`;
     } else {
+      // 1 Tầng: Trắng tinh, nguyên bản
       textAss = sub.text.replace(/\r?\n/g, "\\N");
     }
+
+    // Ghi file ASS
     assContent += `Dialogue: 0,${sub.startTime.replace(",", ".").slice(1, -1)},${sub.endTime.replace(",", ".").slice(1, -1)},Default,,0,0,0,,${textAss}\n`;
   }
   fs.writeFileSync(assPath, assContent, "utf8");

@@ -36,9 +36,28 @@ function processWhisperChunk(chunkPath, threads) {
       "--output-srt",
       "-t",
       threads.toString(),
-      "--split-on-word",
-    ];
 
+      // --- CÁC THAM SỐ ĐÃ ĐƯỢC TỐI ƯU ĐỂ CHỐNG LẶP ---
+
+      // 1. Giới hạn Context: Không cho AI nhìn lại câu cũ để tránh bị cuốn vào vòng lặp
+      "-mc",
+      "0", // (hoặc --max-context 0)
+
+      // 2. Tự động phát hiện ảo giác (Entropy & Logprob thresholds)
+      // Nếu AI bắt đầu lặp, điểm Entropy sẽ tăng cao. Các chỉ số này giúp AI reset lại thay vì lặp tiếp.
+      "-et",
+      "2.4",
+      "-lpt",
+      "-1.0",
+
+      // *LƯU Ý QUAN TRỌNG:
+      // ĐÃ XÓA --temperature 0.2, --beam-size 1, --best-of 1
+      // Hãy để Whisper tự động nâng nhiệt độ (fallback) khi phát hiện lỗi lặp.
+
+      "--max-len",
+      "128",
+      "--no-prints",
+    ];
     const whisperProcess = spawn(paths.whisperExe, args);
 
     whisperProcess.stdout.on("data", (data) => {
