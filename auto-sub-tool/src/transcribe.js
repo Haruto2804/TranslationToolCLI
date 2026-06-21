@@ -6,7 +6,8 @@ const os = require("os");
 const { paths, colors } = require("./config");
 
 const audioBlockDir = path.join(paths.tempDir, "audio_block");
-const CHUNK_DURATION_SEC = 1200; // 20 phút mỗi block
+// Ép Whisper chạy từng block 30 giây để chống ảo giác tự dừng
+const CHUNK_DURATION_SEC = 30;
 
 function srtTimeToMs(timeStr) {
   const [hhmmss, mmm] = timeStr.split(",");
@@ -37,27 +38,14 @@ function processWhisperChunk(chunkPath, threads) {
       "-t",
       threads.toString(),
 
-      // --- CÁC THAM SỐ ĐÃ ĐƯỢC TỐI ƯU ĐỂ CHỐNG LẶP ---
-
-      // 1. Giới hạn Context: Không cho AI nhìn lại câu cũ để tránh bị cuốn vào vòng lặp
+      // Chỉ sử dụng các tham số chuẩn mà bản Whisper CLI của bạn hỗ trợ
       "-mc",
-      "0", // (hoặc --max-context 0)
-
-      // 2. Tự động phát hiện ảo giác (Entropy & Logprob thresholds)
-      // Nếu AI bắt đầu lặp, điểm Entropy sẽ tăng cao. Các chỉ số này giúp AI reset lại thay vì lặp tiếp.
-      "-et",
-      "2.4",
-      "-lpt",
-      "-1.0",
-
-      // *LƯU Ý QUAN TRỌNG:
-      // ĐÃ XÓA --temperature 0.2, --beam-size 1, --best-of 1
-      // Hãy để Whisper tự động nâng nhiệt độ (fallback) khi phát hiện lỗi lặp.
-
-      "--max-len",
-      "128",
+      "32", // Giữ context vừa đủ để dịch mượt, không bị đứng máy
+      "-ml",
+      "64", // Giới hạn chiều dài câu
       "--no-prints",
     ];
+
     const whisperProcess = spawn(paths.whisperExe, args);
 
     whisperProcess.stdout.on("data", (data) => {
@@ -103,7 +91,7 @@ async function runTranscription() {
   );
   console.log(
     colors.bright +
-      " 🎙️  MODULE BÓC BĂNG WHISPER (TỐI ƯU HÓA ĐA LUỒNG)" +
+      " 🎙️  MODULE BÓC BĂNG WHISPER (FIX ẢO GIÁC + CHUẨN THỜI GIAN)" +
       colors.reset,
   );
   console.log(
@@ -140,7 +128,7 @@ async function runTranscription() {
 
   console.log(
     colors.yellow +
-      `📦 1. Đang cắt audio thành các đoạn nhỏ (để chống tràn RAM)...` +
+      `📦 1. Đang cắt audio thành các block ${CHUNK_DURATION_SEC} giây an toàn...` +
       colors.reset,
   );
 
@@ -149,14 +137,16 @@ async function runTranscription() {
     fs.unlinkSync(path.join(audioBlockDir, f)),
   );
 
-  // Cắt Audio
-  const ffmpegCmd = `"${paths.ffmpeg}" -i "${inputAudioPath}" -f segment -segment_time ${CHUNK_DURATION_SEC} -c copy "${path.join(audioBlockDir, "chunk_%03d.wav")}" -y`;
+  // Đã xóa silenceremove gây lệch sub. Dùng bộ cắt chuẩn của FFmpeg.
+  const ffmpegCmd = `"${paths.ffmpeg}" -i "${inputAudioPath}" -f segment -segment_time ${CHUNK_DURATION_SEC} "${path.join(audioBlockDir, "chunk_%03d.wav")}" -y`;
+
   execSync(ffmpegCmd, { stdio: "ignore" });
 
   const chunks = fs
     .readdirSync(audioBlockDir)
     .filter((f) => f.startsWith("chunk_") && f.endsWith(".wav"))
     .sort();
+
   console.log(
     colors.green +
       `✅ Đã chia thành ${chunks.length} block audio.` +
@@ -176,7 +166,15 @@ async function runTranscription() {
         colors.reset,
     );
 
-    await processWhisperChunk(chunkPath, recommendedThreads);
+    try {
+      await processWhisperChunk(chunkPath, recommendedThreads);
+    } catch (err) {
+      console.log(
+        colors.red +
+          `⚠️ Block ${chunks[i]} gặp lỗi nhưng tự động bỏ qua để chạy tiếp.` +
+          colors.reset,
+      );
+    }
 
     if (fs.existsSync(expectedSrtPath)) {
       const srtContent = fs.readFileSync(expectedSrtPath, "utf8");
