@@ -1,48 +1,28 @@
 // src/transcribe.js
-const { spawn, execSync } = require("child_process");
+const { spawn } = require("child_process");
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
 const { paths, colors } = require("./config");
 
-const audioBlockDir = path.join(paths.tempDir, "audio_block");
-// Ép Whisper chạy từng block 30 giây để chống ảo giác tự dừng
-const CHUNK_DURATION_SEC = 30;
-
-function srtTimeToMs(timeStr) {
-  const [hhmmss, mmm] = timeStr.split(",");
-  const [hh, mm, ss] = hhmmss.split(":").map(Number);
-  return (hh * 3600 + mm * 60 + ss) * 1000 + Number(mmm);
-}
-
-function msToSrtTime(ms) {
-  const mmm = String(Math.floor(ms % 1000)).padStart(3, "0");
-  let secs = Math.floor(ms / 1000);
-  const hh = String(Math.floor(secs / 3600)).padStart(2, "0");
-  secs %= 3600;
-  const mm = String(Math.floor(secs / 60)).padStart(2, "0");
-  const ss = String(secs % 60).padStart(2, "0");
-  return `${hh}:${mm}:${ss},${mmm}`;
-}
-
-function processWhisperChunk(chunkPath, threads) {
+function processFullAudio(audioPath, threads) {
   return new Promise((resolve, reject) => {
     const args = [
       "-m",
       paths.whisperModel,
       "-f",
-      chunkPath,
+      audioPath,
       "-l",
       "zh",
       "--output-srt",
       "-t",
       threads.toString(),
 
-      // Chỉ sử dụng các tham số chuẩn mà bản Whisper CLI của bạn hỗ trợ
+      // Cấu hình đã được fix chuẩn để AI không bị đứng hình ở các khoảng lặng/nhạc
       "-mc",
-      "32", // Giữ context vừa đủ để dịch mượt, không bị đứng máy
+      "32",
       "-ml",
-      "64", // Giới hạn chiều dài câu
+      "64",
       "--no-prints",
     ];
 
@@ -91,7 +71,7 @@ async function runTranscription() {
   );
   console.log(
     colors.bright +
-      " 🎙️  MODULE BÓC BĂNG WHISPER (FIX ẢO GIÁC + CHUẨN THỜI GIAN)" +
+      " 🎙️  MODULE BÓC BĂNG WHISPER (ONE-SHOT NGUYÊN KHỐI - KHỚP 100%)" +
       colors.reset,
   );
   console.log(
@@ -102,6 +82,7 @@ async function runTranscription() {
 
   const inputAudioPath = path.join(paths.tempDir, "audio.wav");
   const finalSrtPath = path.join(paths.tempDir, "audio.srt");
+  const rawSrtPath = inputAudioPath + ".srt"; // File do whisper mặc định sinh ra
 
   if (!fs.existsSync(inputAudioPath)) {
     console.log(
@@ -114,103 +95,54 @@ async function runTranscription() {
   if (!fs.existsSync(paths.whisperExe) || !fs.existsSync(paths.whisperModel)) {
     console.log(
       colors.red +
-        "❌ Không tìm thấy file chạy Whisper hoặc Model trong thư mục bin/" +
+        "❌ Không tìm thấy file chạy Whisper hoặc Model trong bin/" +
         colors.reset,
     );
     return;
   }
-
-  if (!fs.existsSync(audioBlockDir))
-    fs.mkdirSync(audioBlockDir, { recursive: true });
 
   const cpuCores = os.cpus().length;
   const recommendedThreads = Math.max(1, cpuCores - 2);
 
   console.log(
     colors.yellow +
-      `📦 1. Đang cắt audio thành các block ${CHUNK_DURATION_SEC} giây an toàn...` +
+      `📦 Đang nạp nguyên khối toàn bộ file audio. Không cắt xén để bảo toàn mốc thời gian...` +
       colors.reset,
   );
 
-  // Dọn dẹp chunk cũ
-  fs.readdirSync(audioBlockDir).forEach((f) =>
-    fs.unlinkSync(path.join(audioBlockDir, f)),
-  );
+  // Xóa file SRT cũ nếu có để tránh ghi đè sai
+  if (fs.existsSync(finalSrtPath)) fs.unlinkSync(finalSrtPath);
+  if (fs.existsSync(rawSrtPath)) fs.unlinkSync(rawSrtPath);
 
-  // Đã xóa silenceremove gây lệch sub. Dùng bộ cắt chuẩn của FFmpeg.
-  const ffmpegCmd = `"${paths.ffmpeg}" -i "${inputAudioPath}" -f segment -segment_time ${CHUNK_DURATION_SEC} "${path.join(audioBlockDir, "chunk_%03d.wav")}" -y`;
-
-  execSync(ffmpegCmd, { stdio: "ignore" });
-
-  const chunks = fs
-    .readdirSync(audioBlockDir)
-    .filter((f) => f.startsWith("chunk_") && f.endsWith(".wav"))
-    .sort();
-
-  console.log(
-    colors.green +
-      `✅ Đã chia thành ${chunks.length} block audio.` +
-      colors.reset,
-  );
-
-  let globalSrtContent = "";
-  let globalSubIndex = 1;
-
-  for (let i = 0; i < chunks.length; i++) {
-    const chunkPath = path.join(audioBlockDir, chunks[i]);
-    const expectedSrtPath = chunkPath + ".srt";
-
+  try {
+    await processFullAudio(inputAudioPath, recommendedThreads);
+  } catch (err) {
     console.log(
-      colors.bright +
-        `\n▶️  [${i + 1}/${chunks.length}] ĐANG BÓC BĂNG: ${chunks[i]}` +
-        colors.reset,
+      colors.red + `⚠️ Tiến trình gặp lỗi: ${err.message}` + colors.reset,
     );
-
-    try {
-      await processWhisperChunk(chunkPath, recommendedThreads);
-    } catch (err) {
-      console.log(
-        colors.red +
-          `⚠️ Block ${chunks[i]} gặp lỗi nhưng tự động bỏ qua để chạy tiếp.` +
-          colors.reset,
-      );
-    }
-
-    if (fs.existsSync(expectedSrtPath)) {
-      const srtContent = fs.readFileSync(expectedSrtPath, "utf8");
-      const offsetMs = i * CHUNK_DURATION_SEC * 1000;
-      const blocks = srtContent.trim().split(/\n\s*\n/);
-
-      for (const block of blocks) {
-        const lines = block
-          .split("\n")
-          .map((l) => l.trim())
-          .filter(Boolean);
-        if (lines.length >= 3) {
-          const match = lines[1].match(
-            /(\d{2}:\d{2}:\d{2},\d{3}) --> (\d{2}:\d{2}:\d{2},\d{3})/,
-          );
-          if (match) {
-            const newStart = msToSrtTime(srtTimeToMs(match[1]) + offsetMs);
-            const newEnd = msToSrtTime(srtTimeToMs(match[2]) + offsetMs);
-            globalSrtContent += `${globalSubIndex}\n${newStart} --> ${newEnd}\n${lines.slice(2).join("\n")}\n\n`;
-            globalSubIndex++;
-          }
-        }
-      }
-      fs.unlinkSync(expectedSrtPath);
-    }
+    return;
   }
 
-  fs.writeFileSync(finalSrtPath, globalSrtContent.trim() + "\n", "utf8");
-  console.log(
-    colors.green +
-      `\n🎉 [HOÀN THÀNH] Đã trích xuất và đồng bộ mốc thời gian thành công!` +
-      colors.reset,
-  );
-  console.log(
-    colors.cyan + `📂 File phụ đề tổng lưu tại: ${finalSrtPath}` + colors.reset,
-  );
+  // Whisper-cli tự động tạo ra file audio.wav.srt. Mình đổi tên lại cho chuẩn.
+  if (fs.existsSync(rawSrtPath)) {
+    fs.renameSync(rawSrtPath, finalSrtPath);
+    console.log(
+      colors.green +
+        `\n🎉 [HOÀN THÀNH] Phụ đề đã được trích xuất NGUYÊN BẢN, đảm bảo dính chặt từng mili-giây!` +
+        colors.reset,
+    );
+    console.log(
+      colors.cyan +
+        `📂 File phụ đề tổng lưu tại: ${finalSrtPath}` +
+        colors.reset,
+    );
+  } else {
+    console.log(
+      colors.red +
+        "❌ Không tìm thấy file phụ đề đầu ra! Whisper có thể đã sập giữa chừng." +
+        colors.reset,
+    );
+  }
 }
 
 module.exports = { runTranscription };

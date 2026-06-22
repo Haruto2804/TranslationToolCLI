@@ -50,6 +50,26 @@ async function renderVideo() {
   const t3 = path.join(paths.tempDir, "target_3.srt");
   const audioSub = path.join(paths.tempDir, "audio.srt");
 
+  // BÍ QUYẾT: Ưu tiên dùng video đã được ép khung hình CFR ở Module 1
+  const cfrVideoPath = path.join(paths.tempDir, "video_cfr.mp4");
+  const targetVideo = fs.existsSync(cfrVideoPath)
+    ? cfrVideoPath
+    : paths.inputVideo;
+
+  if (targetVideo === cfrVideoPath) {
+    console.log(
+      colors.green +
+        "✅ Đang dùng Video chuẩn CFR để render (Chống lệch sub)" +
+        colors.reset,
+    );
+  } else {
+    console.log(
+      colors.yellow +
+        "⚠️ Cảnh báo: Không tìm thấy Video CFR, đang dùng video gốc!" +
+        colors.reset,
+    );
+  }
+
   let subs = [];
 
   // GỘP FILE THÔNG MINH
@@ -88,11 +108,11 @@ async function renderVideo() {
     subs = parser.fromSrt(fs.readFileSync(source, "utf8"));
   }
 
-  // TÍNH TOÁN CẤU HÌNH RENDER
+  // TÍNH TOÁN CẤU HÌNH RENDER TỪ VIDEO MỤC TIÊU
   let videoWidth = 1920,
     videoHeight = 1080;
   try {
-    const metadata = await ffprobeAsync(paths.inputVideo);
+    const metadata = await ffprobeAsync(targetVideo);
     const vStream = metadata.streams.find((s) => s.codec_type === "video");
     if (vStream) {
       videoWidth = vStream.width;
@@ -127,23 +147,18 @@ async function renderVideo() {
 
     if (lines.length >= 3) {
       // 3 Tầng: Dòng 1 (Vàng) - Dòng 2 (Blue) - Dòng 3 (Hồng Bocchi)
-      // Tính toán kích thước font
       const size1 = Math.floor(styleConfig.fontSize * 0.75);
       const size2 = Math.floor(styleConfig.fontSize * 0.85);
       const size3 = styleConfig.fontSize;
 
-      // Tạo chuỗi ASS với màu mới
       textAss = [
         `{\\fs${size1}\\1c&H00FFFF&}${lines[0]}`, // Vàng
         `{\\fs${size2}\\1c&HFFFF80&}${lines[1]}`, // Xanh dương nhạt
         `{\\fs${size3}\\1c&HFFC0FF&}${lines[2]}`, // Hồng nhạt
       ].join("\\N");
     } else if (lines.length === 2) {
-      // 2 Tầng: Dòng 1 (Vàng) - Dòng 2 (Hồng Bocchi)
-      // Dòng 1 nhỏ hơn xíu (80% size)
       textAss = `{\\fs${Math.floor(styleConfig.fontSize * 0.8)}\\1c&H00FFFF&}${lines[0]}\\N{\\fs${styleConfig.fontSize}\\1c&HB4A2F7&}${lines[1]}`;
     } else {
-      // 1 Tầng: Mặc định màu hồng Bocchi cho đồng bộ
       textAss = `{\\1c&HB4A2F7&}${sub.text.replace(/\r?\n/g, "\\N")}`;
     }
 
@@ -154,7 +169,7 @@ async function renderVideo() {
   }
   fs.writeFileSync(assPath, assContent, "utf8");
 
-  // RENDER BẰNG FFMPEG (Đã bọc trong Promise để await được)
+  // RENDER BẰNG FFMPEG
   if (fs.existsSync(paths.finalVideo)) {
     try {
       fs.unlinkSync(paths.finalVideo);
@@ -167,14 +182,15 @@ async function renderVideo() {
   console.log(colors.yellow + "🎬 Đang encode video..." + colors.reset);
 
   return new Promise((resolve, reject) => {
-    ffmpeg(paths.inputVideo)
+    // Ép render vào video mục tiêu (video_cfr.mp4)
+    ffmpeg(targetVideo)
       .videoFilters(`ass='${assPath.replace(/\\/g, "/").replace(":", "\\:")}'`)
       .outputOptions([
         "-c:v libx264",
         "-preset fast",
         "-crf 23",
         "-pix_fmt yuv420p",
-        "-c:a copy",
+        "-c:a copy", // Copy nguyên vẹn âm thanh CFR chuẩn
       ])
       .on("progress", (p) => {
         if (p.percent) {
